@@ -35,7 +35,7 @@ jobs:
       - name: Copy build artifacts to repo root
         run: |
           cp plugin/main.js main.js
-          cp plugin/manifest.js manifest.js
+          cp plugin/manifest.json manifest.json
           cp plugin/versions.json versions.json
 
       - name: Attest build provenance
