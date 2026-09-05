@@ -40,13 +40,13 @@ jobs:
         with:
           subject-path: main.js
 
-      - name: Release
+      - name: Upload release assets
+        uses: softprops/action-gh-release@2
+        with:
+          files: |
+            main.js
+            manifest.json
+            versions.json
+          tag_name: $GITHUB_REF_NAME
         env:
           GITHUB_TOKEN: $ {{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag="${GITHUB_REFE_NAME}"
-          gh release create "$tag" main.js manifest.json versions.json \
-            --repo "$GITHUB_REPOSITORY" \
-            --generate-notes || \
-          gh release upload "$tag" main.js manifest.json versions.json \
-            --repo "$GITHUB_REPOSITORY" --clobber
