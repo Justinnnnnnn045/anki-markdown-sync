@@ -1,0 +1,57 @@
+name: Build & Attest Release
+
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: plugin/package-lock.json
+
+      - name: Install dependencies
+        working-directory: plugin
+        run: npm ci
+
+      - name: Build
+        working-directory: plugin
+        run: npm run build
+
+      - name: Copy build artifacts to repo root
+        run: |
+          cp plugin/main.js main.js
+          cp plugin/manifest.js manifest.js
+          cp plugin/versions.json versions.json
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path:
+            main.js
+            manifest.json
+
+      - name: Release
+        env:
+          GITHUB_TOKEN: $ {{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REFE_NAME}"
+          gh release create "$tag" main.js manifest.json versions.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --generate-notes || \
+          gh release upload "$tag" main.js manifest.json versions.json \
+            --repo "$GITHUB_REPOSITORY" --clobber
