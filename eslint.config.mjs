@@ -1,8 +1,11 @@
-const tseslint = require('typescript-eslint');
+import tseslint from 'typescript-eslint';
+import { fileURLToPath } from 'node:url';
 
-module.exports = tseslint.config(
+const rootDir = fileURLToPath(new URL('.', import.meta.url));
+
+export default tseslint.config(
 	{
-		ignores: ['node_modules/', 'main.js', 'esbuild.config.mjs', '*.config.*'],
+		ignores: ['node_modules/', 'main.js', 'esbuild.config.mjs'],
 	},
 	...tseslint.configs.recommendedTypeChecked,
 	{
@@ -10,7 +13,7 @@ module.exports = tseslint.config(
 		languageOptions: {
 			parserOptions: {
 				project: './tsconfig.json',
-				tsconfigRootDir: __dirname,
+				tsconfigRootDir: rootDir,
 			},
 		},
 		rules: {
@@ -22,9 +25,9 @@ module.exports = tseslint.config(
 			'@typescript-eslint/no-unsafe-argument': 'error',
 			'@typescript-eslint/no-unnecessary-type-assertion': 'error',
 			'@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+			'@typescript-eslint/no-require-imports': 'error',
 			'@typescript-eslint/restrict-template-expressions': 'error',
 			'@typescript-eslint/no-base-to-string': 'error',
-			'@typescript-eslint/no-require-imports': 'off',
 		},
-	}
+	},
 );

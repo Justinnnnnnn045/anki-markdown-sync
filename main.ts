@@ -1,4 +1,4 @@
-import { App, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile, requestUrl } from 'obsidian';
+import { App, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile, requestUrl, type SettingDefinitionItem } from 'obsidian';
 
 // ---------------------------------------------------------------------------
 // Anki Markdown Sync — Obsidian plugin
@@ -26,8 +26,8 @@ interface Flashcard {
 }
 
 interface AnkiActionResponse {
-	result?: unknown;
 	error?: string;
+	result?: unknown;
 }
 
 interface SyncSettings {
@@ -78,15 +78,16 @@ export default class AnkiMarkdownSync extends Plugin {
 			name: 'Sync current note to Anki',
 			callback: () => {
 				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (view) void this.syncFiles([view.file as TFile]);
+				const file = view?.file;
+				if (file instanceof TFile) void this.syncFiles([file]);
 			},
 		});
 		this.addSettingTab(new SyncSettingTab(this.app, this));
 	}
 
 	async loadSettings(): Promise<void> {
-		const raw = await this.loadData() as unknown;
-		const data: Partial<SyncSettings> = isRecord(raw) ? raw : {};
+		const raw = (await this.loadData()) as unknown;
+		const data = isRecord(raw) ? raw : {};
 		this.settings = Object.assign(this.settings, data);
 	}
 
@@ -95,14 +96,14 @@ export default class AnkiMarkdownSync extends Plugin {
 	}
 
 	// ---- AnkiConnect ----
-	async anki(action: string, params: Record<string, unknown> = {}): Promise<unknown> {
+	private async anki(action: string, params: Record<string, unknown> = {}): Promise<unknown> {
 		const resp = await requestUrl({
 			url: this.settings.ankiUrl,
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ action, params, version: 6 }),
 		});
-		const payload = resp.json as AnkiActionResponse;
+		const payload = JSON.parse(resp.text) as AnkiActionResponse;
 		if (payload.error) throw new Error(`AnkiConnect '${action}': ${payload.error}`);
 		return payload.result;
 	}
@@ -245,7 +246,7 @@ export default class AnkiMarkdownSync extends Plugin {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			new Notice(`Anki Sync failed: ${message}`);
-		}
+			}
 	}
 }
 
@@ -255,6 +256,52 @@ class SyncSettingTab extends PluginSettingTab {
 	constructor(app: App, plugin: AnkiMarkdownSync) {
 		super(app, plugin);
 		this.plugin = plugin;
+	}
+
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		return [
+			{
+				name: 'AnkiConnect URL',
+				desc: 'Default http://127.0.0.1:8765 (AnkiConnect plugin must be installed in Anki)',
+				control: {
+					type: 'text',
+					key: 'ankiUrl',
+					placeholder: 'http://127.0.0.1:8765',
+				},
+			},
+			{
+				name: 'Anki deck',
+				desc: 'Destination deck, created automatically',
+				control: {
+					type: 'text',
+					key: 'deck',
+				},
+			},
+			{
+				name: 'Anki model',
+				desc: 'Note type, created automatically',
+				control: {
+					type: 'text',
+					key: 'modelName',
+				},
+			},
+		];
+	}
+
+	getControlValue(key: string): unknown {
+		const s = this.plugin.settings;
+		if (key === 'ankiUrl') return s.ankiUrl;
+		if (key === 'deck') return s.deck;
+		if (key === 'modelName') return s.modelName;
+		return undefined;
+	}
+
+	async setControlValue(key: string, value: unknown): Promise<void> {
+		const text = typeof value === 'string' ? value : String(value);
+		if (key === 'ankiUrl') this.plugin.settings.ankiUrl = text;
+		else if (key === 'deck') this.plugin.settings.deck = text;
+		else if (key === 'modelName') this.plugin.settings.modelName = text;
+		await this.plugin.saveSettings();
 	}
 
 	display(): void {

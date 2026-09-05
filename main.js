@@ -69,8 +69,9 @@ var AnkiMarkdownSync = class extends import_obsidian.Plugin {
       name: "Sync current note to Anki",
       callback: () => {
         const view = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
-        if (view)
-          void this.syncFiles([view.file]);
+        const file = view == null ? void 0 : view.file;
+        if (file instanceof import_obsidian.TFile)
+          void this.syncFiles([file]);
       }
     });
     this.addSettingTab(new SyncSettingTab(this.app, this));
@@ -91,7 +92,7 @@ var AnkiMarkdownSync = class extends import_obsidian.Plugin {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, params, version: 6 })
     });
-    const payload = resp.json;
+    const payload = JSON.parse(resp.text);
     if (payload.error)
       throw new Error(`AnkiConnect '${action}': ${payload.error}`);
     return payload.result;
@@ -242,6 +243,55 @@ var SyncSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
+  }
+  getSettingDefinitions() {
+    return [
+      {
+        name: "AnkiConnect URL",
+        desc: "Default http://127.0.0.1:8765 (AnkiConnect plugin must be installed in Anki)",
+        control: {
+          type: "text",
+          key: "ankiUrl",
+          placeholder: "http://127.0.0.1:8765"
+        }
+      },
+      {
+        name: "Anki deck",
+        desc: "Destination deck, created automatically",
+        control: {
+          type: "text",
+          key: "deck"
+        }
+      },
+      {
+        name: "Anki model",
+        desc: "Note type, created automatically",
+        control: {
+          type: "text",
+          key: "modelName"
+        }
+      }
+    ];
+  }
+  getControlValue(key) {
+    const s = this.plugin.settings;
+    if (key === "ankiUrl")
+      return s.ankiUrl;
+    if (key === "deck")
+      return s.deck;
+    if (key === "modelName")
+      return s.modelName;
+    return void 0;
+  }
+  async setControlValue(key, value) {
+    const text = typeof value === "string" ? value : String(value);
+    if (key === "ankiUrl")
+      this.plugin.settings.ankiUrl = text;
+    else if (key === "deck")
+      this.plugin.settings.deck = text;
+    else if (key === "modelName")
+      this.plugin.settings.modelName = text;
+    await this.plugin.saveSettings();
   }
   display() {
     const { containerEl } = this;
