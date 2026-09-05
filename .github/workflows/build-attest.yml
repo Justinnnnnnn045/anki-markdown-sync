@@ -38,9 +38,7 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path:
-            main.js
-            manifest.json
+          subject-path: main.js
 
       - name: Release
         env:
