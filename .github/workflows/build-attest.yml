@@ -32,11 +32,8 @@ jobs:
         working-directory: plugin
         run: npm run build
 
-      - name: Copy build artifacts to repo root
-        run: |
-          cp plugin/main.js main.js
-          cp plugin/manifest.json manifest.json
-          cp plugin/versions.json versions.json
+      - name: Copy built main.js to repo root
+        run: cp plugin/main.js main.js
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
@@ -44,6 +41,7 @@ jobs:
           subject-path:
             main.js
             manifest.json
+          provenance-name: main.js
 
       - name: Release
         env:
