@@ -1,7 +1,7 @@
 {
   "id": "anki-markdown-sync",
   "name": "Anki Markdown Sync",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "minAppVersion": "1.4.0",
   "description": "Two-way sync between your markdown vault and Anki via AnkiConnect. Write ````anki` blocks, sync to Anki, edit in Anki, sync back. Conflict-safe.",
   "author": "PD.Radar",
