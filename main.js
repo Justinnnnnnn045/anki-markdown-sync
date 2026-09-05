@@ -34,7 +34,10 @@ var MODEL = "NoteSync";
 var TAG = "flashcardsync";
 var FENCE_RE = /```anki\s*\n([\s\S]*?)```/g;
 var ID_RE = /^\s*<!--\s*id:([A-Za-z0-9_-]+)\s*-->\s*$/;
-function sha256(s) {
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function toHash(s) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);
@@ -56,38 +59,61 @@ var AnkiMarkdownSync = class extends import_obsidian.Plugin {
     this.addRibbonIcon("refresh-cw", "Sync to Anki", () => {
       void this.syncAll();
     });
-    this.addCommand({ id: "sync-all", name: "Sync vault \u2194 Anki", callback: () => void this.syncAll() });
+    this.addCommand({
+      id: "sync-all",
+      name: "Sync vault \u2194 Anki",
+      callback: () => void this.syncAll()
+    });
     this.addCommand({
       id: "sync-current-file",
       name: "Sync current note to Anki",
       callback: () => {
-        const v = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
-        if (v)
-          void this.syncFiles([v.file]);
+        const view = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+        if (view)
+          void this.syncFiles([view.file]);
       }
     });
     this.addSettingTab(new SyncSettingTab(this.app, this));
   }
   async loadSettings() {
-    this.settings = Object.assign(this.settings, await this.loadData());
+    const raw = await this.loadData();
+    const data = isRecord(raw) ? raw : {};
+    this.settings = Object.assign(this.settings, data);
   }
   async saveSettings() {
     await this.saveData(this.settings);
   }
   // ---- AnkiConnect ----
   async anki(action, params = {}) {
-    const resp = await fetch(this.settings.ankiUrl, {
+    const resp = await (0, import_obsidian.requestUrl)({
+      url: this.settings.ankiUrl,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, params, version: 6 })
     });
-    const payload = await resp.json();
+    const payload = resp.json;
     if (payload.error)
       throw new Error(`AnkiConnect '${action}': ${payload.error}`);
     return payload.result;
   }
+  async cardQuery(query) {
+    const raw = await this.anki("findNotes", { query });
+    return Array.isArray(raw) ? raw : [];
+  }
+  async notesInfo(ids) {
+    const raw = await this.anki("notesInfo", { notes: ids });
+    return Array.isArray(raw) ? raw : [];
+  }
+  async modelNames() {
+    const raw = await this.anki("modelNames");
+    return Array.isArray(raw) ? raw : [];
+  }
+  async deckNames() {
+    const raw = await this.anki("deckNames");
+    return Array.isArray(raw) ? raw : [];
+  }
   async ensureDeckAndModel() {
-    const models = await this.anki("modelNames");
+    const models = await this.modelNames();
     if (!models.includes(this.settings.modelName)) {
       await this.anki("createModel", {
         modelName: this.settings.modelName,
@@ -96,73 +122,65 @@ var AnkiMarkdownSync = class extends import_obsidian.Plugin {
         css: ""
       });
     }
-    const decks = await this.anki("deckNames");
+    const decks = await this.deckNames();
     if (!decks.includes(this.settings.deck))
       await this.anki("createDeck", { deck: this.settings.deck });
   }
-  // ---- vault scan ----
-  scanVault() {
-    const out = [];
-    const walk = (folder, prefix = "") => {
-      for (const child of folder.children) {
-        if (child instanceof import_obsidian.TFolder)
-          walk(child, `${prefix}${child.name}/`);
-        else if (child.name.endsWith(".md")) {
-          const rel = `${prefix}${child.name}`;
-          const text = this.app.vault.cachedRead(this.app.vault.getAbstractFileByPath(rel));
-        }
-      }
-    };
-    walk(this.app.vault.getRoot());
-    return out;
-  }
   // ---- full sync over current vault files ----
   async syncFiles(paths) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d;
     await this.ensureDeckAndModel();
     const files = paths || this.app.vault.getMarkdownFiles();
     const local = /* @__PURE__ */ new Map();
-    for (const f of files) {
-      const text = await this.app.vault.cachedRead(f);
-      const rel = f.path;
-      for (const m of text.matchAll(FENCE_RE)) {
-        const body = m[1];
-        if (!body.includes("::"))
+    for (const file of files) {
+      const text = await this.app.vault.cachedRead(file);
+      const rel = file.path;
+      for (const match of text.matchAll(FENCE_RE)) {
+        const block = match[1];
+        if (!block.includes("::"))
           continue;
         let qid;
-        const lines = body.split("\n");
-        if (lines.length && ID_RE.test(lines[0].trim())) {
-          qid = lines[0].trim().match(ID_RE)[1];
+        const lines = block.split("\n");
+        const first = lines[0].trim();
+        const idMatch = first.match(ID_RE);
+        if (idMatch) {
+          qid = idMatch[1];
           lines.shift();
         }
         const head = lines.join("\n").trim();
         if (!head.includes("::"))
           continue;
-        const [front, ...rest] = head.split("::");
-        qid = qid != null ? qid : sha256(`${rel}|${front.trim()}`);
-        local.set(qid, { qid, front: front.trim(), back: rest.join("::").trim(), source: rel });
+        const sep = head.indexOf("::");
+        const front = head.slice(0, sep).trim();
+        const back = head.slice(sep + 2).trim();
+        const id = qid || toHash(`${rel}|${front}`);
+        local.set(id, { qid: id, front, back, source: rel });
       }
     }
-    const ids = await this.anki("findNotes", { query: `tag:${TAG}` });
-    const infos = await this.anki("notesInfo", { notes: ids });
+    const ids = await this.cardQuery(`tag:${TAG}`);
+    const infos = await this.notesInfo(ids);
     const remote = /* @__PURE__ */ new Map();
     for (const info of infos) {
-      const tags = info.tags || [];
-      const qid = (_a = tags.find((t) => t.startsWith(`${TAG}#`))) == null ? void 0 : _a.split("#")[1];
+      const tagged = info.tags.find((t) => t.startsWith(`${TAG}#`));
+      if (!tagged)
+        continue;
+      const qid = tagged.split("#")[1];
       if (!qid)
         continue;
       remote.set(qid, {
         qid,
-        front: (_c = (_b = info.fields.Front) == null ? void 0 : _b.value) != null ? _c : "",
-        back: (_e = (_d = info.fields.Back) == null ? void 0 : _d.value) != null ? _e : "",
+        front: (_b = (_a = info.fields.Front) == null ? void 0 : _a.value) != null ? _b : "",
+        back: (_d = (_c = info.fields.Back) == null ? void 0 : _c.value) != null ? _d : "",
         source: "",
         ankiId: info.noteId
       });
     }
-    let added = 0, updated = 0, pulled = 0;
+    let added = 0;
+    let updated = 0;
+    let pulled = 0;
     const toAdd = [];
-    for (const [qid, card] of local) {
-      const other = remote.get(qid);
+    for (const [id, card] of local) {
+      const other = remote.get(id);
       if (!other) {
         toAdd.push(card);
         added++;
@@ -172,15 +190,14 @@ var AnkiMarkdownSync = class extends import_obsidian.Plugin {
       }
     }
     const inbox = [];
-    for (const [qid, card] of remote) {
-      if (!local.has(qid)) {
-        inbox.push(`<!-- id:${qid} -->
+    for (const [id, card] of remote) {
+      if (!local.has(id)) {
+        inbox.push(`<!-- id:${id} -->
 ${card.front}:: ${card.back}`);
         pulled++;
       }
     }
     if (inbox.length) {
-      const inboxFile = this.app.vault.getAbstractFileByPath("_anki_inbox.md");
       const block = `
 
 <!-- pulled from Anki ${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)} -->
@@ -189,30 +206,35 @@ ${card.front}:: ${card.back}`);
 ${inbox.join("\n\n")}
 \`\`\`
 `;
-      if (inboxFile instanceof import_obsidian.TFile) {
-        const cur = await this.app.vault.read(inboxFile);
-        await this.app.vault.modify(inboxFile, cur + block);
+      const inboxPath = "_anki_inbox.md";
+      const existing = this.app.vault.getAbstractFileByPath(inboxPath);
+      if (existing instanceof import_obsidian.TFile) {
+        const current = await this.app.vault.read(existing);
+        await this.app.vault.modify(existing, current + block);
       } else {
-        await this.app.vault.create("_anki_inbox.md", `# Anki inbox
+        await this.app.vault.create(inboxPath, `# Anki inbox
 ${block}`);
       }
     }
     for (const card of toAdd) {
-      await this.anki("addNote", { note: {
-        deckName: this.settings.deck,
-        modelName: this.settings.modelName,
-        fields: { Front: card.front, Back: card.back },
-        tags: [TAG, `${TAG}#${card.qid}`],
-        options: { allowDuplicate: false }
-      } });
+      await this.anki("addNote", {
+        note: {
+          deckName: this.settings.deck,
+          modelName: this.settings.modelName,
+          fields: { Front: card.front, Back: card.back },
+          tags: [TAG, `${TAG}#${card.qid}`],
+          options: { allowDuplicate: false }
+        }
+      });
     }
     new import_obsidian.Notice(`Anki Sync: +${added} added, ${updated} updated, ${pulled} pulled`);
   }
   async syncAll() {
     try {
       await this.syncFiles();
-    } catch (e) {
-      new import_obsidian.Notice(`Anki Sync failed: ${e.message}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      new import_obsidian.Notice(`Anki Sync failed: ${message}`);
     }
   }
 };
@@ -224,13 +246,14 @@ var SyncSettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Anki Markdown Sync" });
-    new import_obsidian.Setting(containerEl).setName("AnkiConnect URL").setDesc("Default http://127.0.0.1:8765 (AnkiConnect plugin must be installed in Anki)").addText((t) => t.setValue(this.plugin.settings.ankiUrl).onChange(async (v) => {
-      this.plugin.settings.ankiUrl = v.trim();
+    new import_obsidian.Setting(containerEl).setName("Connection").setHeading();
+    new import_obsidian.Setting(containerEl).setName("AnkiConnect URL").setDesc("Default http://127.0.0.1:8765 (AnkiConnect plugin must be installed in Anki)").addText((text) => text.setValue(this.plugin.settings.ankiUrl).onChange(async (value) => {
+      this.plugin.settings.ankiUrl = value.trim();
       await this.plugin.saveSettings();
     }));
-    new import_obsidian.Setting(containerEl).setName("Anki deck").setDesc("Destination deck, created automatically").addText((t) => t.setValue(this.plugin.settings.deck).onChange(async (v) => {
-      this.plugin.settings.deck = v.trim();
+    new import_obsidian.Setting(containerEl).setName("Sync target").setHeading();
+    new import_obsidian.Setting(containerEl).setName("Anki deck").setDesc("Destination deck, created automatically").addText((text) => text.setValue(this.plugin.settings.deck).onChange(async (value) => {
+      this.plugin.settings.deck = value.trim();
       await this.plugin.saveSettings();
     }));
   }
