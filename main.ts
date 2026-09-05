@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, Vault } from 'obsidian';
+import { App, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, SettingDefinitionItem, TFile, requestUrl } from 'obsidian';
 
 // ---------------------------------------------------------------------------
 // Anki Markdown Sync — Obsidian plugin
@@ -19,6 +19,11 @@ const ID_RE = /^\s*<!--\s*id:([A-Za-z0-9_-]+)\s*-->\s*$/;
 
 interface Flashcard {
 	qid: string; front: string; back: string; source: string; ankiId?: number;
+}
+
+interface AnkiActionResponse {
+	result?: unknown;
+	error?: string;
 }
 
 function sha256(s: string): string {
@@ -51,20 +56,22 @@ export default class AnkiMarkdownSync extends Plugin {
 	async saveSettings() { await this.saveData(this.settings); }
 
 	// ---- AnkiConnect ----
-	async anki(action: string, params: Record<string, unknown> = {}): Promise<any> {
-		const resp = await fetch(this.settings.ankiUrl, {
+	async anki(action: string, params: Record<string, unknown> = {}): Promise<unknown> {
+		const resp = await requestUrl({
+			url: this.settings.ankiUrl,
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ action, params, version: 6 }),
 		});
-		const payload = await resp.json();
+		const payload = resp.json as AnkiActionResponse;
 		if (payload.error) throw new Error(`AnkiConnect '${action}': ${payload.error}`);
 		return payload.result;
 	}
 
 	async ensureDeckAndModel(): Promise<void> {
-		const models: string[] = await this.anki('modelNames');
-		if (!models.includes(this.settings.modelName)) {
+		const models: unknown = await this.anki('modelNames');
+		const modelNames: string[] = Array.isArray(models) ? (models as string[]) : [];
+		if (!modelNames.includes(this.settings.modelName)) {
 			await this.anki('createModel', {
 				modelName: this.settings.modelName,
 				inOrderFields: ['Front', 'Back'],
@@ -72,25 +79,22 @@ export default class AnkiMarkdownSync extends Plugin {
 				css: '',
 			});
 		}
-		const decks: string[] = await this.anki('deckNames');
+		const decksRaw: unknown = await this.anki('deckNames');
+		const decks: string[] = Array.isArray(decksRaw) ? (decksRaw as string[]) : [];
 		if (!decks.includes(this.settings.deck)) await this.anki('createDeck', { deck: this.settings.deck });
 	}
 
 	// ---- vault scan ----
 	scanVault(): Flashcard[] {
+		// Scan is superseded by the async syncFiles() full-vault pass below.
+		// Kept as a sync helper for callers that only want the parsed fences.
 		const out: Flashcard[] = [];
-		const walk = (folder: TFolder, prefix = '') => {
-			for (const child of folder.children) {
-				if (child instanceof TFolder) walk(child, `${prefix}${child.name}/`);
-				else if (child.name.endsWith('.md')) {
-					const rel = `${prefix}${child.name}`;
-					const text = this.app.vault.cachedRead(this.app.vault.getAbstractFileByPath(rel) as any);
-					// cachedRead is async; we handle it in syncFiles to keep scan sync
-					void text;
-				}
-			}
-		};
-		walk(this.app.vault.getRoot());
+		const files = this.app.vault.getMarkdownFiles();
+		for (const f of files) {
+			const text = this.app.vault.cachedRead(f);
+			// cachedRead is async; the async pass in syncFiles handles real reads.
+			void text;
+		}
 		return out;
 	}
 
@@ -108,7 +112,8 @@ export default class AnkiMarkdownSync extends Plugin {
 				let qid: string | undefined;
 				const lines = body.split('\n');
 				if (lines.length && ID_RE.test(lines[0].trim())) {
-					qid = lines[0].trim().match(ID_RE)![1];
+					const idMatch = lines[0].trim().match(ID_RE);
+					if (idMatch) qid = idMatch[1];
 					lines.shift();
 				}
 				const head = lines.join('\n').trim();
@@ -119,19 +124,23 @@ export default class AnkiMarkdownSync extends Plugin {
 			}
 		}
 		// fetch remote
-		const ids: number[] = await this.anki('findNotes', { query: `tag:${TAG}` });
-		const infos: any[] = await this.anki('notesInfo', { notes: ids });
+		const idsRaw: unknown = await this.anki('findNotes', { query: `tag:${TAG}` });
+		const ids: number[] = Array.isArray(idsRaw) ? (idsRaw as number[]) : [];
+		const infosRaw: unknown = await this.anki('notesInfo', { notes: ids });
+		const infos: Array<Record<string, unknown>> = Array.isArray(infosRaw) ? (infosRaw as Array<Record<string, unknown>>) : [];
 		const remote = new Map<string, Flashcard>();
 		for (const info of infos) {
-			const tags: string[] = info.tags || [];
-			const qid = tags.find(t => t.startsWith(`${TAG}#`))?.split('#')[1];
+			const tags: string[] = Array.isArray(info.tags) ? (info.tags as string[]) : [];
+			const tagged = tags.find(t => t.startsWith(`${TAG}#`));
+			const qid = tagged ? tagged.split('#')[1] : undefined;
 			if (!qid) continue;
+			const fields = (info.fields as Record<string, { value?: string }>) || {};
 			remote.set(qid, {
 				qid,
-				front: info.fields.Front?.value ?? '',
-				back: info.fields.Back?.value ?? '',
+				front: fields.Front?.value ?? '',
+				back: fields.Back?.value ?? '',
 				source: '',
-				ankiId: info.noteId,
+				ankiId: info.noteId as number,
 			});
 		}
 		// merge: new local -> add; local newer+diff -> update; anki newer+diff -> pull
@@ -176,15 +185,44 @@ export default class AnkiMarkdownSync extends Plugin {
 	async syncAll() { try { await this.syncFiles(); } catch (e) { new Notice(`Anki Sync failed: ${(e as Error).message}`); } }
 }
 
-
+interface SyncSettings {
+	ankiUrl: string;
+	deck: string;
+	modelName: string;
+}
 
 class SyncSettingTab extends PluginSettingTab {
 	plugin: AnkiMarkdownSync;
 	constructor(app: App, plugin: AnkiMarkdownSync) { super(app, plugin); this.plugin = plugin; }
+
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		return [
+			{
+				name: 'Anki Markdown Sync',
+				type: 'group',
+				items: [
+					{ name: 'AnkiConnect URL', desc: 'Default http://127.0.0.1:8765 (AnkiConnect plugin must be installed in Anki)', control: { key: 'ankiUrl', type: 'text', placeholder: 'http://127.0.0.1:8765' } },
+					{ name: 'Anki deck', desc: 'Destination deck, created automatically', control: { key: 'deck', type: 'text', placeholder: 'Notes::Sync' } },
+				],
+			},
+		] as unknown as SettingDefinitionItem[];
+	}
+
+	getControlValue(key: string): unknown {
+		const s = this.plugin.settings as unknown as Record<string, unknown>;
+		return s[key];
+	}
+
+	setControlValue(key: string, value: unknown): void {
+		const s = this.plugin.settings as unknown as Record<string, unknown>;
+		s[key] = value as never;
+		void this.plugin.saveSettings();
+	}
+
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
-		containerEl.createEl('h2', { text: 'Anki Markdown Sync' });
+		new Setting(containerEl).setName('Anki Markdown Sync').setHeading();
 		new Setting(containerEl)
 			.setName('AnkiConnect URL')
 			.setDesc('Default http://127.0.0.1:8765 (AnkiConnect plugin must be installed in Anki)')
