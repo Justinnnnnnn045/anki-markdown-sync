@@ -4,7 +4,6 @@ on:
   push:
     tags:
       - '*'
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -41,12 +40,13 @@ jobs:
           subject-path: main.js
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@2
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             main.js
             manifest.json
             versions.json
-          tag_name: $GITHUB_REF_NAME
+          tag_name: ${{ github.ref_name }}
+          fail_on_unmatched_files: true
         env:
-          GITHUB_TOKEN: $ {{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
