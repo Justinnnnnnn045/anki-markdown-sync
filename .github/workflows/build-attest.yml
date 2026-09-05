@@ -40,8 +40,17 @@ jobs:
           files: |
             main.js
             manifest.json
-            versions.json
           tag_name: ${{ github.ref_name }}
+          body: |
+            Anki Markdown Sync ${{ github.ref_name }}
+
+            Two-way Anki ↔ Markdown sync for Obsidian. Write ````anki`` blocks,
+            sync to Anki via AnkiConnect, edit in Anki, sync back. Conflict-safe,
+            idempotent, tags every card for clean round-trips.
+
+            ## What's new in this release
+            - Cleaned lint: declarative settings (searchable), `requestUrl`, typed
+              AnkiConnect responses, no `builtin-modules` dependency.
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
