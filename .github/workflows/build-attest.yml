@@ -41,7 +41,6 @@ jobs:
           subject-path:
             main.js
             manifest.json
-          provenance-name: main.js
 
       - name: Release
         env:
